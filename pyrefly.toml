@@ -1,0 +1,10 @@
+# Pyrefly configuration
+# https://pyrefly.org/en/docs/configuration/
+
+# Tell Pyrefly that Python sources live under ai_agent/,
+# so imports like `backend.database`, `agent.state` etc. resolve correctly.
+search_path = ["ai_agent"]
+
+python_interpreter = "C:/Users/A0669/Desktop/ATS-clone/venv/Scripts/python.exe"
+
+python_version = "3.11"
