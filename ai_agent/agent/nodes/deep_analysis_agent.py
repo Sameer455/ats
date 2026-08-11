@@ -7,7 +7,6 @@ from typing import Any
 from agent.state import ATSAgentState
 
 
-# Interview prompt template
 _INTERVIEW_PROMPT = """You are a senior technical interviewer.
 
 Based on the following candidate analysis, generate exactly 8 targeted interview questions.
@@ -36,7 +35,6 @@ Return a JSON array of exactly 8 objects. Each object must have:
 Return ONLY the JSON array, no other text.
 """
 
-# Upskilling prompt template
 _UPSKILLING_PROMPT = """You are a career development advisor.
 
 Based on the candidate's current skills and identified gaps, create an upskilling plan.
@@ -67,22 +65,18 @@ Return ONLY the JSON array, no other text.
 
 
 def _safe_parse_json_array(raw: str) -> list[dict[str, Any]]:
-    """Parse a JSON array from LLM output, handling markdown fences."""
     if not raw or not raw.strip():
         return []
 
-    # Strip markdown code fences
     cleaned = re.sub(r"```(?:json)?\s*", "", raw)
     cleaned = re.sub(r"```\s*$", "", cleaned)
     cleaned = cleaned.strip()
 
-    # Try to find the JSON array
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # Try to extract array from within text
     match = re.search(r"\[.*\]", cleaned, re.DOTALL)
     if match:
         try:
@@ -94,7 +88,6 @@ def _safe_parse_json_array(raw: str) -> list[dict[str, Any]]:
 
 
 def _generate_fallback_questions(state: ATSAgentState) -> list[dict[str, Any]]:
-    """Generate fallback interview questions without LLM."""
     questions: list[dict[str, Any]] = []
     missing = state.get("missing_skills") or []
     matched = state.get("matched_skills") or []
@@ -135,7 +128,6 @@ def _generate_fallback_questions(state: ATSAgentState) -> list[dict[str, Any]]:
 
 
 def _generate_fallback_upskilling(state: ATSAgentState) -> list[dict[str, Any]]:
-    """Generate fallback upskilling plan without LLM."""
     missing = state.get("missing_skills") or []
     plan: list[dict[str, Any]] = []
 
@@ -156,7 +148,6 @@ def _generate_fallback_upskilling(state: ATSAgentState) -> list[dict[str, Any]]:
 
 
 def deep_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
-    """Generate interview questions and upskilling plan (SINGLE mode only)."""
     trace: list[str] = list(state.get("agent_trace", []))
     enable_llm: bool = state.get("enable_llm", True)
     llm_provider: str = state.get("llm_provider", "ollama")
@@ -179,13 +170,12 @@ def deep_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
         }
 
     try:
-        from llm.llm_chain import _get_llm  # type: ignore
+        from llm.llm_chain import _get_llm
         from langchain_core.prompts import PromptTemplate
         from langchain_core.output_parsers import StrOutputParser
 
         llm = _get_llm(llm_provider)
 
-        # Generate interview questions
         try:
             iq_prompt = PromptTemplate(
                 input_variables=[
@@ -214,7 +204,6 @@ def deep_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
             trace.append(f"deep_analysis: interview question generation failed — {iq_err}")
             interview_questions = _generate_fallback_questions(state)
 
-        # Generate upskilling plan
         try:
             up_prompt = PromptTemplate(
                 input_variables=[

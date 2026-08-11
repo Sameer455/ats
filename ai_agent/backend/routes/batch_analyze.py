@@ -20,7 +20,6 @@ from ..auth.utils import get_current_user_email
 
 router = APIRouter(prefix="/api", tags=["Batch Analysis"])
 
-# Accepted MIME types for resume uploads
 _ACCEPTED_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -39,9 +38,6 @@ async def analyze_batch(
     db: Session = Depends(get_db),
     current_email: str = Depends(get_current_user_email),
 ):
-    """Analyze 2-20 resumes against a single JD and return ranked results."""
-
-    # Authenticate user
     user = db.query(User).filter(User.email == current_email).first()
     if not user:
         raise HTTPException(
@@ -49,7 +45,6 @@ async def analyze_batch(
             detail="User not found in database",
         )
 
-    # Validate resume count
     if len(resumes) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -61,7 +56,6 @@ async def analyze_batch(
             detail="Maximum 20 resumes per batch",
         )
 
-    # Validate file types
     for resume in resumes:
         if resume.content_type not in _ACCEPTED_TYPES:
             raise HTTPException(
@@ -69,21 +63,20 @@ async def analyze_batch(
                 detail=f"Unsupported file type for {resume.filename}: {resume.content_type}. Accepted: PDF, DOCX",
             )
 
-    # Resolve JD text
     jd_title: str = "Custom JD"
     if jd_id is not None:
         jd_entry = db.query(JDLibrary).filter(
             JDLibrary.id == jd_id,
-            JDLibrary.is_active == True,  # noqa: E712
+            JDLibrary.is_active == True,
         ).first()
         if not jd_entry:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="JD not found in library",
             )
-        jd_text = jd_entry.jd_text  # type: ignore
-        jd_title = jd_entry.title  # type: ignore
-        jd_entry.usage_count += 1  # type: ignore
+        jd_text = jd_entry.jd_text
+        jd_title = jd_entry.title
+        jd_entry.usage_count += 1
         db.commit()
     elif not jd_text:
         raise HTTPException(
@@ -91,7 +84,6 @@ async def analyze_batch(
             detail="Provide either jd_text or jd_id",
         )
 
-    # Import agent components
     from agent.state import ATSAgentState, AnalysisMode
     from agent.graph import ats_agent
 
@@ -100,7 +92,6 @@ async def analyze_batch(
     if jd_text:
         jd_snippet = jd_text[:200] + "..." if len(jd_text) > 200 else jd_text
 
-    # Process each resume sequentially
     candidates: list[dict] = []
     for resume in resumes:
         try:
@@ -128,7 +119,6 @@ async def analyze_batch(
             result_state = ats_agent.invoke(initial_state)
             final_report: dict = result_state.get("final_report", {})
 
-            # Save to history (individual record per resume)
             history_entry = AnalysisHistory(
                 user_id=user.id,
                 resume_filename=resume.filename,
@@ -163,7 +153,6 @@ async def analyze_batch(
         except Exception as exc:
             candidates.append(_error_candidate(resume.filename or "unknown", str(exc)))
 
-    # Sort by composite_score descending and assign ranks
     candidates.sort(key=lambda c: c.get("composite_score", 0.0), reverse=True)
     for idx, candidate in enumerate(candidates, start=1):
         candidate["rank"] = idx
@@ -177,7 +166,6 @@ async def analyze_batch(
 
 
 def _error_candidate(filename: str, error_msg: str) -> dict:
-    """Build a placeholder candidate entry when processing fails."""
     return {
         "rank":                 0,
         "resume_filename":      filename,

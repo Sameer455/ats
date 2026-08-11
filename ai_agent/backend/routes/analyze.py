@@ -21,7 +21,6 @@ async def analyze_resume(
     db: Session = Depends(get_db),
     current_email: str = Depends(get_current_user_email),
 ):
-    """Analyze a resume against a JD using the LangGraph agent pipeline."""
     try:
         user = db.query(User).filter(User.email == current_email).first()
         if not user:
@@ -30,7 +29,6 @@ async def analyze_resume(
                 detail="User not found in database",
             )
 
-        # Resolve JD text from library or direct input
         if jd_id is not None:
             jd_entry = db.query(JDLibrary).filter(
                 JDLibrary.id == jd_id,
@@ -41,8 +39,8 @@ async def analyze_resume(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="JD not found in library",
                 )
-            jd_text = jd_entry.jd_text  # type: ignore
-            jd_entry.usage_count += 1  # type: ignore
+            jd_text = jd_entry.jd_text
+            jd_entry.usage_count += 1
             db.commit()
         elif jd_text:
             jd_text = jd_text
@@ -83,7 +81,6 @@ async def analyze_resume(
         result_state = ats_agent.invoke(initial_state)
         final_report = result_state.get("final_report", {})
 
-        # Save result to history
         jd_snippet = None
         if jd_text:
             jd_snippet = jd_text[:200] + "..." if len(jd_text) > 200 else jd_text

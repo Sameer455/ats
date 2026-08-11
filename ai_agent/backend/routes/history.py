@@ -11,7 +11,6 @@ def get_user_history(
     db: Session = Depends(get_db), 
     current_email: str = Depends(get_current_user_email)
 ):
-    """Get all analysis history for the authenticated user, sorted by date (newest first)."""
     user = db.query(User).filter(User.email == current_email).first()
     if not user:
         raise HTTPException(
@@ -19,13 +18,11 @@ def get_user_history(
             detail="User not found"
         )
 
-    # Get all histories, descending date
     histories = db.query(AnalysisHistory)\
                   .filter(AnalysisHistory.user_id == user.id)\
                   .order_by(AnalysisHistory.created_at.desc())\
                   .all()
     
-    # Return structured summary for dashboard
     return [
         {
             "id": h.id,
@@ -43,7 +40,6 @@ def get_history_detail(
     db: Session = Depends(get_db), 
     current_email: str = Depends(get_current_user_email)
 ):
-    """Get detailed analysis results for a specific history entry."""
     user = db.query(User).filter(User.email == current_email).first()
     if not user:
         raise HTTPException(

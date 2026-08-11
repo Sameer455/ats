@@ -1,12 +1,3 @@
-"""
-llm_chain.py - LangChain-powered LLM analysis chain for ATS insights.
-
-Supports:
-- Groq  (free API - default, set GROQ_API_KEY in .env)
-- OpenAI (via OPENAI_API_KEY in .env)
-- Ollama (local - needs Ollama running on localhost:11434)
-"""
-
 import os
 from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
@@ -16,14 +7,6 @@ load_dotenv()
 
 
 def _get_llm(provider: str = "ollama"):
-    """
-    Returns the correct LLM instance based on provider.
-
-    Providers:
-      - 'ollama' : Local Ollama server (default). Must be running on localhost:11434.
-      - 'groq'   : Free Groq Cloud API. Get key at console.groq.com.
-      - 'openai' : OpenAI API (paid). Requires OPENAI_API_KEY.
-    """
     if provider == "ollama":
         try:
             from langchain_ollama import OllamaLLM as OllamaClass
@@ -65,9 +48,6 @@ def _get_llm(provider: str = "ollama"):
         raise ValueError(f"Unsupported provider: {provider}")
 
 
-# ──────────────────────────────────────────────
-# Prompt Template
-# ──────────────────────────────────────────────
 _ATS_ANALYSIS_PROMPT = PromptTemplate(
     input_variables=[
         "job_role",
@@ -150,9 +130,6 @@ def run_ats_analysis(
     jd_text: str,
     provider: str = "ollama",
 ) -> str:
-    """
-    Runs the full LangChain ATS analysis and returns the LLM response as a string.
-    """
     llm = _get_llm(provider)
     chain = _ATS_ANALYSIS_PROMPT | llm | StrOutputParser()
 
@@ -165,7 +142,7 @@ def run_ats_analysis(
         "experience_years": experience_years,
         "required_experience": required_experience,
         "education": ", ".join(education) if education else "Not specified",
-        "jd_text": jd_text[:1500],  # Truncate JD to avoid token limits
+        "jd_text": jd_text[:1500],
     })
 
     return result

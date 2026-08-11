@@ -1,21 +1,3 @@
-"""
-agent/nodes/jd_analysis_agent.py — Node 3: Job Description analysis.
-
-Extracts skills from the JD and classifies each as required vs preferred
-using sentence-level keyword detection.  Also auto-detects:
-  - Required years of experience from JD text via regex
-  - Role category (data_science, devops, frontend, product, engineering)
-  - Seniority level (intern, junior, mid, senior, manager)
-
-ESCO upgrade (additive — existing logic unchanged):
-  - After extracting JD skills, finds the closest ESCO occupation.
-  - If confidence ≥ 0.7: merges ESCO essential skills into required list,
-    adds ESCO optional skills to preferred list, and computes implicit skills.
-  - Adds state keys: jd_esco_occupation, jd_esco_confidence,
-    jd_implicit_skills, jd_esco_skill_profile.
-  - Falls back gracefully when ESCOLoader is not available or confidence < 0.7.
-"""
-
 from __future__ import annotations
 
 import re
@@ -24,11 +6,9 @@ from typing import Any
 from agent.state import ATSAgentState
 
 
-# ── Keyword signals for required vs preferred classification ──────────────────
 _REQUIRED_SIGNALS = {"must", "required", "mandatory", "essential", "minimum"}
 _PREFERRED_SIGNALS = {"preferred", "nice to have", "plus", "bonus", "desired"}
 
-# ── Role category detection patterns ─────────────────────────────────────────
 _ROLE_CATEGORY_PATTERNS: dict[str, list[str]] = {
     "data_science": [
         "data scien", "machine learning", "ml engineer", "deep learning",
@@ -55,7 +35,6 @@ _ROLE_CATEGORY_PATTERNS: dict[str, list[str]] = {
     ],
 }
 
-# ── Seniority detection patterns ─────────────────────────────────────────────
 _SENIORITY_PATTERNS: dict[str, list[str]] = {
     "intern":  ["intern", "internship", "trainee", "apprentice", "co-op"],
     "junior":  ["junior", "entry level", "entry-level", "associate", "graduate"],
@@ -64,7 +43,6 @@ _SENIORITY_PATTERNS: dict[str, list[str]] = {
     "manager": ["manager", "director", "head of", "vp ", "vice president", "chief", "cto", "ceo"],
 }
 
-# ── Experience requirement regex ─────────────────────────────────────────────
 _EXP_REQUIREMENT_RE = re.compile(
     r"(\d{1,2})\+?\s*(?:[-–—]?\s*\d{1,2}\+?\s*)?(?:years?|yrs?)\s*"
     r"(?:of\s+)?(?:relevant\s+|professional\s+|hands[- ]on\s+|industry\s+)?"
@@ -72,15 +50,10 @@ _EXP_REQUIREMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── ESCO confidence threshold for merging skills ──────────────────────────────
 _ESCO_CONFIDENCE_THRESHOLD = 0.70
 
 
 def _classify_skill_requirement(skill: str, jd_text: str) -> str:
-    """
-    Classifies a single JD skill as 'required' or 'preferred' based on
-    the sentence context in which it appears.
-    """
     jd_lower    = jd_text.lower()
     skill_lower = skill.lower()
 
@@ -98,7 +71,6 @@ def _classify_skill_requirement(skill: str, jd_text: str) -> str:
 
 
 def _detect_role_category(jd_text: str) -> str:
-    """Detects the most likely role category from the JD text."""
     jd_lower = jd_text.lower()
     scores: dict[str, int] = {
         cat: sum(1 for p in patterns if p in jd_lower)
@@ -110,7 +82,6 @@ def _detect_role_category(jd_text: str) -> str:
 
 
 def _detect_seniority(jd_text: str) -> str:
-    """Detects the seniority level from the JD text."""
     jd_lower = jd_text.lower()
     scores: dict[str, int] = {
         level: sum(1 for p in patterns if p in jd_lower)
@@ -122,7 +93,6 @@ def _detect_seniority(jd_text: str) -> str:
 
 
 def _detect_required_experience(jd_text: str) -> float:
-    """Extracts the minimum required years of experience from JD text."""
     matches = _EXP_REQUIREMENT_RE.findall(jd_text)
     if matches:
         try:
@@ -132,23 +102,12 @@ def _detect_required_experience(jd_text: str) -> float:
     return 0.0
 
 
-# ── ESCO enrichment (new, additive) ──────────────────────────────────────────
-
 def _esco_enrich(
     jd_text: str,
     jd_required_skills: list[str],
     jd_preferred_skills: list[str],
     esco_loader: Any,
 ) -> dict[str, Any]:
-    """
-    Run ESCO semantic occupation matching and merge taxonomy skills.
-
-    Returns a dict with keys:
-      jd_esco_occupation, jd_esco_confidence, jd_implicit_skills,
-      jd_esco_skill_profile, jd_required_skills (enriched), jd_preferred_skills (enriched)
-
-    Falls back to empty values when confidence < threshold or ESCO unavailable.
-    """
     empty: dict[str, Any] = {
         "jd_esco_occupation":   "",
         "jd_esco_confidence":   0.0,
@@ -182,7 +141,6 @@ def _esco_enrich(
         profile = esco_loader.get_role_skill_profile(best["uri"])
         jd_lower = jd_text.lower()
 
-        # Merge essential ESCO skills into required list (deduped)
         existing_required = {s.lower() for s in jd_required_skills}
         enriched_required = list(jd_required_skills)
         for s in profile.get("essential_skills", []):
@@ -190,7 +148,6 @@ def _esco_enrich(
                 enriched_required.append(s)
                 existing_required.add(s.lower())
 
-        # Merge optional ESCO skills into preferred list (deduped)
         existing_preferred = {s.lower() for s in jd_preferred_skills}
         enriched_preferred = list(jd_preferred_skills)
         for s in profile.get("optional_skills", []):
@@ -198,7 +155,6 @@ def _esco_enrich(
                 enriched_preferred.append(s)
                 existing_preferred.add(s.lower())
 
-        # Implicit skills: ESCO essential but not mentioned in JD text
         implicit = [
             s for s in profile.get("essential_skills", [])
             if s.lower() not in jd_lower
@@ -219,21 +175,7 @@ def _esco_enrich(
         return empty
 
 
-# ── Main node function ────────────────────────────────────────────────────────
-
 def jd_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
-    """
-    JD Analysis Agent — extracts and classifies JD requirements.
-
-    Reads:
-        jd_text, esco_loader (optional)
-    Writes:
-        jd_skills, jd_required_skills, jd_preferred_skills,
-        jd_role_category, jd_seniority_level, jd_required_exp,
-        jd_esco_occupation, jd_esco_confidence,
-        jd_implicit_skills, jd_esco_skill_profile,
-        agent_trace
-    """
     trace: list[str] = list(state.get("agent_trace", []))
     jd_text: str     = state.get("jd_text", "")
     esco_loader: Any = state.get("esco_loader", None)
@@ -247,7 +189,6 @@ def jd_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
         jd_skills_raw = extract_skills(clean_jd)
         jd_skills     = normalize_skills(jd_skills_raw)
 
-        # ── Classify required vs preferred ────────────────────────────────────
         jd_required_skills: list[str]  = []
         jd_preferred_skills: list[str] = []
         for skill in jd_skills:
@@ -256,14 +197,12 @@ def jd_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
             else:
                 jd_required_skills.append(skill)
 
-        # ── Role / seniority / experience detection ───────────────────────────
         jd_role_category  = _detect_role_category(clean_jd)
         jd_seniority_level = _detect_seniority(clean_jd)
         jd_required_exp   = _detect_required_experience(clean_jd)
         if jd_required_exp == 0.0:
             jd_required_exp = state.get("required_experience", 0.0)
 
-        # ── ESCO enrichment (additive) ────────────────────────────────────────
         esco_result = _esco_enrich(
             jd_text            = clean_jd,
             jd_required_skills = jd_required_skills,
@@ -271,7 +210,6 @@ def jd_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
             esco_loader        = esco_loader,
         )
 
-        # Use enriched lists if ESCO returned them
         jd_required_skills  = esco_result["jd_required_skills"]
         jd_preferred_skills = esco_result["jd_preferred_skills"]
 
@@ -286,14 +224,12 @@ def jd_analysis_agent(state: ATSAgentState) -> dict[str, Any]:
         )
 
         return {
-            # ── Existing fields (unchanged) ───────────────────────────────────
             "jd_skills":             jd_skills,
             "jd_required_skills":    jd_required_skills,
             "jd_preferred_skills":   jd_preferred_skills,
             "jd_role_category":      jd_role_category,
             "jd_seniority_level":    jd_seniority_level,
             "jd_required_exp":       jd_required_exp,
-            # ── New ESCO fields (additive) ────────────────────────────────────
             "jd_esco_occupation":    esco_result["jd_esco_occupation"],
             "jd_esco_confidence":    esco_result["jd_esco_confidence"],
             "jd_implicit_skills":    esco_result["jd_implicit_skills"],

@@ -1,33 +1,12 @@
-"""
-experience_extractor.py - Accurate professional experience calculation.
-
-Fixes applied (v2):
-  1. Added 'sept' to _MONTH_MAP and _MONTH_PAT regex — handles common abbreviation.
-  2. Context-aware education filter — uses surrounding text to distinguish
-     2-year jobs from 2-year degrees instead of filtering all short spans.
-  3. Surrounding text passed to edu filter for every date range match.
-  4. Smarter year-only fallback — looks back 50 chars for a month name
-     instead of always defaulting to January.
-  5. Unit test at bottom — run directly to verify: python experience_extractor.py
-
-Core features (unchanged from v1):
-  - Merges overlapping date ranges (prevents double-counting concurrent roles).
-  - Handles 15+ date formats including "to", "till", "'YY" abbreviations.
-  - Explicit mention parsing with "X months" support.
-  - Strict sanity caps on both single-range duration and total.
-"""
-
 import re
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 
-# ─── Constants ────────────────────────────────────────────────────────────────
 _MAX_SINGLE_RANGE_YEARS = 15
 _MAX_TOTAL_YEARS        = 45
 _MIN_CAREER_YEAR        = 1990
 
-# FIX 1 — added "sept": 9
 _MONTH_MAP = {
     "jan": 1,  "feb": 2,  "mar": 3,  "apr": 4,  "may": 5,  "jun": 6,
     "jul": 7,  "aug": 8,  "sep": 9,  "sept": 9, "oct": 10, "nov": 11, "dec": 12,
@@ -38,7 +17,6 @@ _MONTH_MAP = {
 
 _PRESENT_WORDS = {"present", "current", "now", "till date", "ongoing", "today", "date"}
 
-# FIX 1 — added sep(?:t)? to match sep / sept / september
 _MONTH_PAT = (
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t)?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
@@ -50,7 +28,6 @@ _YEAR_SHORT_PAT = r"'?\d{2}"
 _SEP_PAT        = r"\s*(?:[-–—]|to|till|through|until)\s*"
 _PRESENT_PAT    = r"(?:present|current|now|till\s+date|ongoing|today)"
 
-# ── Full date range regex ─────────────────────────────────────────────────────
 _DATE_RANGE_RE = re.compile(
     r"(?:" + _MONTH_PAT + r"[,\s]*)?"
     r"(" + _YEAR_PAT + r")"
@@ -60,7 +37,6 @@ _DATE_RANGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Month+Year range: "Jan 2020 – Mar 2023" ──────────────────────────────────
 _MONTH_YEAR_RANGE_RE = re.compile(
     r"(" + _MONTH_PAT + r")\s*[,]?\s*(" + _YEAR_PAT + r")"
     r"\s*" + _SEP_PAT +
@@ -69,20 +45,17 @@ _MONTH_YEAR_RANGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Explicit "X years [and Y months] of experience" ──────────────────────────
 _EXPLICIT_YEARS_RE = re.compile(
     r"\b(\d{1,2})\+?\s*(?:years?|yrs?)(?:\s+and\s+(\d{1,2})\s+months?)?"
     r"(?:\s+of)?(?:\s+(?:professional\s+|work\s+|industry\s+)?experience)?\b",
     re.IGNORECASE,
 )
 
-# ── Explicit "X months experience" ───────────────────────────────────────────
 _EXPLICIT_MONTHS_RE = re.compile(
     r"\b(\d{1,2})\s+months?\s+(?:of\s+)?(?:professional\s+)?experience\b",
     re.IGNORECASE,
 )
 
-# ── Education / job context keywords ─────────────────────────────────────────
 _EDU_KEYWORDS = {
     "university", "college", "institute", "school", "academy",
     "bachelor", "master", "b.tech", "m.tech", "be ", "me ", "bsc",
@@ -98,18 +71,13 @@ _JOB_KEYWORDS = {
     "programmer", "administrator", "executive", "head", "vp",
     "vice president", "cto", "ceo", "principal", "staff",
     "senior", "junior", "technology", "software",
-    # NOTE: "computer" excluded — "Computer Science" is a degree name not a job title
 }
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
 def _parse_month(s: str) -> int:
-    """Parse a month string to its integer value. Returns 1 if unrecognised."""
     if not s:
         return 1
     key = s.strip().rstrip(".").lower()
-    # Try full key first, then up to 9 chars (handles "september" → "september")
     return _MONTH_MAP.get(key, _MONTH_MAP.get(key[:9], 1))
 
 
@@ -134,11 +102,6 @@ def _range_months(start_dt: datetime, end_dt: datetime) -> int:
 
 
 def _merge_intervals(intervals: list) -> list:
-    """
-    Merges overlapping [start_dt, end_dt] intervals to avoid double-counting
-    concurrent roles. e.g. [(2020-01, 2022-06), (2021-03, 2023-09)]
-    becomes [(2020-01, 2023-09)].
-    """
     if not intervals:
         return []
     intervals.sort(key=lambda x: x[0])
@@ -151,28 +114,14 @@ def _merge_intervals(intervals: list) -> list:
     return [tuple(m) for m in merged]
 
 
-# FIX 2 — context-aware education year filter ─────────────────────────────────
-
 def _looks_like_edu_year_only(
     start_year: int,
     end_year: int,
     surrounding_text: str = "",
 ) -> bool:
-    """
-    Returns True only if a year-only range looks like an education entry.
-
-    v2 logic (context-aware):
-      - Span must be 2-6 years (typical degree) to even be considered.
-      - If surrounding text contains job-role keywords → NOT education → False.
-      - If surrounding text contains education keywords → IS education → True.
-      - If ambiguous (no strong signal either way) → filter only spans <= 4 yrs.
-
-    This prevents 2-year jobs like "Aug 2017 - Aug 2019" from being
-    incorrectly discarded as degree entries.
-    """
     span = end_year - start_year
     if not (2 <= span <= 6):
-        return False  # outside typical degree range — never filter
+        return False
 
     text_lower = surrounding_text.lower()
 
@@ -180,53 +129,31 @@ def _looks_like_edu_year_only(
     has_edu_signal = any(kw in text_lower for kw in _EDU_KEYWORDS)
 
     if has_job_signal and not has_edu_signal:
-        return False   # clear job context — keep this interval
-
-    if has_edu_signal and not has_job_signal:
-        return True    # clear education context — discard
-
-    if has_edu_signal and has_job_signal:
-        # Mixed signals (e.g. "Engineer, IIT Bombay") — trust job signal
         return False
 
-    # No strong signal either way — apply conservative filter for <= 4 yr spans
+    if has_edu_signal and not has_job_signal:
+        return True
+
+    if has_edu_signal and has_job_signal:
+        return False
+
     return span <= 4
 
 
-# FIX 4 — smarter month inference for year-only ranges ────────────────────────
-
 def _guess_month_from_context(text_before: str) -> int:
-    """
-    Look backward up to 60 chars for a month name before a year token.
-    Returns 1 (January) if no month found — conservative default.
-
-    Example: "Adobe, Bangalore Mar 2021 - ..." → finds "mar" → returns 3
-    """
     snippet = text_before[-60:].lower()
-    # Check longest keys first to avoid partial matches (september before sep)
     for name in sorted(_MONTH_MAP.keys(), key=len, reverse=True):
         if name in snippet:
             return _MONTH_MAP[name]
     return 1
 
 
-# ─── Main extractor ───────────────────────────────────────────────────────────
-
 def extract_experience(text: str, is_education_section: bool = False) -> float:
-    """
-    Returns total professional experience in years (float, 1 decimal).
-
-    Strategy priority:
-      1. Explicit "X years [Y months] of experience" → most reliable
-      2. Explicit "X months of experience" → convert to years
-      3. Date range analysis with overlap merging → accurate timeline
-    """
     if not text or not text.strip():
         return 0.0
 
     now = datetime.now()
 
-    # ── Strategy 1 & 2: Explicit mentions ─────────────────────────────────
     best_explicit_months = 0
 
     for m in _EXPLICIT_YEARS_RE.finditer(text):
@@ -244,10 +171,8 @@ def extract_experience(text: str, is_education_section: bool = False) -> float:
     if best_explicit_months > 0:
         return round(min(best_explicit_months / 12, _MAX_TOTAL_YEARS), 1)
 
-    # ── Strategy 3: Date range analysis ───────────────────────────────────
     intervals = []
 
-    # Pass A: Month+Year ranges (most precise) — "Jan 2020 – Mar 2023"
     month_year_positions = set()
 
     for m in _MONTH_YEAR_RANGE_RE.finditer(text):
@@ -282,10 +207,9 @@ def extract_experience(text: str, is_education_section: bool = False) -> float:
         except (ValueError, TypeError):
             continue
 
-    # Pass B: Year-only or year+present — "2019 - Present", "2021 - 2024"
     for m in _DATE_RANGE_RE.finditer(text):
         if m.start() in month_year_positions:
-            continue  # already handled by Pass A
+            continue
 
         start_yr_str, end_part = m.group(1), m.group(2)
 
@@ -297,7 +221,7 @@ def extract_experience(text: str, is_education_section: bool = False) -> float:
                 end_month = now.month
             else:
                 end_year  = int(end_part)
-                end_month = 6  # assume mid-year for year-only end
+                end_month = 6
 
             if start_year < _MIN_CAREER_YEAR or end_year < _MIN_CAREER_YEAR:
                 continue
@@ -306,18 +230,13 @@ def extract_experience(text: str, is_education_section: bool = False) -> float:
             if end_year < start_year:
                 continue
 
-            # FIX 3 — extract surrounding text for context-aware edu filter
-            # Use only text BEFORE the date range (120 chars) + small window after (40 chars)
-            # This prevents job entries that come AFTER an edu range from polluting the filter
             ctx_start   = max(0, m.start() - 120)
             ctx_end     = min(len(text), m.end() + 40)
             surrounding = text[ctx_start:ctx_end]
 
-            # FIX 2 — pass context to education filter
             if _looks_like_edu_year_only(start_year, end_year, surrounding):
                 continue
 
-            # FIX 4 — guess start month from text before the year token
             text_before  = text[max(0, m.start() - 60): m.start()]
             start_month  = _guess_month_from_context(text_before)
 
@@ -333,16 +252,12 @@ def extract_experience(text: str, is_education_section: bool = False) -> float:
     if not intervals:
         return 0.0
 
-    # ── Merge overlapping intervals ─────────────────────────────────────────
     merged      = _merge_intervals(intervals)
     total_months = sum(_range_months(s, e) for s, e in merged)
     total_years  = round(min(total_months / 12, _MAX_TOTAL_YEARS), 1)
 
     return total_years
 
-
-# ─── Unit tests ───────────────────────────────────────────────────────────────
-# Run directly: python experience_extractor.py
 
 if __name__ == "__main__":
     import sys
@@ -362,7 +277,6 @@ if __name__ == "__main__":
 
     print("\n=== experience_extractor.py unit tests ===\n")
 
-    # ── Test 1: The exact resume from the bug report ───────────────────────
     adobe_amazon_morgan = """
     Adobe, Bangalore Mar 2021 - Present
     Computer Scientist
@@ -381,18 +295,15 @@ if __name__ == "__main__":
     """
     check("Adobe+Amazon+Morgan (bug report)", adobe_amazon_morgan, 8.4, 8.8)
 
-    # ── Test 2: sept abbreviation specifically ─────────────────────────────
     sept_test = "Company X Sept 2020 - Sept 2022 Senior Engineer Python Java"
     check("'Sept' abbreviation", sept_test, 1.9, 2.1)
 
-    # ── Test 3: Overlapping roles (should merge, not double-count) ─────────
     overlap_test = """
     Company A Jan 2020 - Dec 2022  Software Engineer
     Company B Jun 2021 - Jun 2023  Consultant
     """
     check("Overlapping roles merged", overlap_test, 3.3, 3.6)
 
-    # ── Test 4: Education year range should be filtered ────────────────────
     edu_test = """
     B.Tech Computer Science
     IIT Bombay University 2014 - 2018
@@ -400,7 +311,6 @@ if __name__ == "__main__":
     """
     check("Education range filtered", edu_test, 0.0, 0.5)
 
-    # ── Test 5: 2-year job should NOT be filtered (core fix) ───────────────
     two_year_job = """
     Morgan Stanley, Bangalore Aug 2017 - Aug 2019
     Technology Associate
@@ -408,21 +318,17 @@ if __name__ == "__main__":
     """
     check("2-year job NOT filtered", two_year_job, 1.9, 2.1)
 
-    # ── Test 6: Explicit mention overrides date parsing ────────────────────
     explicit_test = "I have 6 years and 3 months of professional experience in software development."
     check("Explicit mention (6y 3m)", explicit_test, 6.2, 6.3)
 
-    # ── Test 7: Present-day role ───────────────────────────────────────────
     present_test = "Google, Mountain View Jun 2022 - Present Staff Engineer"
     result = extract_experience(present_test)
     expected_min = (datetime.now().year - 2022) + (datetime.now().month - 6) / 12 - 0.2
     check("Present-day role", present_test, max(0, expected_min), expected_min + 0.5)
 
-    # ── Test 8: No experience → 0 ─────────────────────────────────────────
     check("Empty text → 0", "", 0.0, 0.0)
     check("No dates → 0", "Skilled in Python and FastAPI.", 0.0, 0.0)
 
-    # ── Test 9: Mixed edu + job in same text ──────────────────────────────
     mixed_test = """
     B.Tech, NIT Trichy University 2014 - 2018
 
@@ -434,6 +340,5 @@ if __name__ == "__main__":
     """
     check("Mixed edu+job (edu filtered)", mixed_test, 7.4, 8.2)
 
-    # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'All tests passed!' if errors == 0 else f'{errors} test(s) failed.'}\n")
     sys.exit(0 if errors == 0 else 1)

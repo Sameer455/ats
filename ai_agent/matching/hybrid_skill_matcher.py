@@ -1,82 +1,23 @@
-"""
-hybrid_skill_matcher.py - Hybrid skill matching combining fuzzy + embedding similarity.
-
-Combines RapidFuzz token_sort_ratio (syntactic) with sentence-transformer cosine
-similarity (semantic) for robust skill gap analysis. This catches:
-  - Typo variants and minor wording differences          (fuzzy)
-  - Semantically equivalent skills with different names  (embeddings)
-    e.g. "machine learning" ↔ "ml modeling"
-    e.g. "rest api" ↔ "web services"
-    e.g. "data visualization" ↔ "data viz"
-
-Score formula:
-    combined = α × fuzzy_score + (1 - α) × embedding_score
-    α = FUZZY_WEIGHT (default 0.4) — embeddings are the stronger signal
-
-Guards:
-    FUZZY_FLOOR    — hard-reject if fuzzy < 0.30 (prevents embedding-only false positives)
-    FUZZY_FASTPATH — auto-match if fuzzy > 0.90 (skips embedding for obvious matches)
-
-All thresholds are env-configurable for runtime tuning without code changes.
-Set in your .env file:
-    SKILL_FUZZY_WEIGHT=0.4
-    SKILL_MATCH_THRESHOLD=0.72
-    SKILL_FUZZY_FLOOR=0.30
-    SKILL_FUZZY_FASTPATH=0.90
-
-Method labels in match_details:
-    "fuzzy_fastpath"    — fuzzy > FUZZY_FASTPATH, embedding computation skipped
-    "hybrid"            — both signals used, fuzzy was dominant
-    "embedding_primary" — both signals used, embedding was dominant
-    "unmatched"         — no resume skill scored above MATCH_THRESHOLD
-    "rejected"          — fuzzy < FUZZY_FLOOR (internal, not exposed in match_details)
-
-Reuses the model instance from semantic_matcher.get_model() —
-no second copy of the model is loaded into memory.
-"""
-
 import os
 from rapidfuzz import fuzz
 from sentence_transformers import util as st_util
 
 
-# ── Configurable thresholds ────────────────────────────────────────────────────
 FUZZY_WEIGHT    = float(os.getenv("SKILL_FUZZY_WEIGHT",    "0.4"))
 MATCH_THRESHOLD = float(os.getenv("SKILL_MATCH_THRESHOLD", "0.72"))
 FUZZY_FLOOR     = float(os.getenv("SKILL_FUZZY_FLOOR",     "0.30"))
 FUZZY_FASTPATH  = float(os.getenv("SKILL_FUZZY_FASTPATH",  "0.90"))
 
 
-def _hybrid_score(
-    skill_a: str,
-    skill_b: str,
-    emb_a,
-    emb_b,
-) -> tuple[float, str]:
-    """
-    Computes hybrid match score between two skills.
-
-    Args:
-        skill_a:  First skill string (e.g. JD skill).
-        skill_b:  Second skill string (e.g. resume skill).
-        emb_a:    Pre-computed embedding tensor for skill_a.
-        emb_b:    Pre-computed embedding tensor for skill_b.
-
-    Returns:
-        (score: float [0.0–1.0], method: str)
-    """
+def _hybrid_score(skill_a: str, skill_b: str, emb_a, emb_b) -> tuple[float, str]:
     fuzzy_score = fuzz.token_sort_ratio(skill_a, skill_b) / 100.0
 
-    # Hard reject: too syntactically dissimilar to trust embedding alone.
-    # Prevents "analysis" embedding-matching "machine learning" via coincidence.
     if fuzzy_score < FUZZY_FLOOR:
         return 0.0, "rejected"
 
-    # Fast-path: strong fuzzy match — skip embedding to save latency.
     if fuzzy_score > FUZZY_FASTPATH:
         return fuzzy_score, "fuzzy_fastpath"
 
-    # Hybrid: combine both signals
     embed_score = st_util.cos_sim(emb_a, emb_b).item()
     embed_score = max(0.0, min(1.0, embed_score))
     combined    = FUZZY_WEIGHT * fuzzy_score + (1.0 - FUZZY_WEIGHT) * embed_score
@@ -85,43 +26,7 @@ def _hybrid_score(
     return combined, method
 
 
-def compute_hybrid_skill_gap(
-    resume_skills: list,
-    jd_skills: list,
-) -> dict:
-    """
-    Compares resume and JD skills using hybrid fuzzy + embedding matching.
-
-    Key improvements over simple set-difference (old compute_skill_gap):
-      - Catches semantically equivalent skills with different wording
-      - Catches abbreviation variants not in the synonym table
-      - Batch encodes all skills at once — O(n) embeddings not O(n²)
-      - extra_skills correctly excludes hybrid-matched skills
-
-    Args:
-        resume_skills: Normalised skill strings from the resume.
-        jd_skills:     Normalised skill strings from the JD.
-
-    Returns:
-        {
-            matched_skills      : JD skills found in resume (direct or semantic)
-            missing_skills      : JD skills NOT found in resume
-            extra_skills        : Resume skills not satisfying any JD requirement
-            skill_coverage_pct  : % of JD skills matched (float)
-            match_details       : Per-JD-skill breakdown list
-            match_method_summary: Counts by matching method
-        }
-
-    match_details entry format:
-        {
-            jd_skill  : str          — the JD skill being matched
-            matched_to: str | None   — which resume skill it matched (None if unmatched)
-            confidence: float        — score × 100, e.g. 87.3
-            method    : str          — "fuzzy_fastpath" | "hybrid" |
-                                       "embedding_primary" | "unmatched"
-        }
-    """
-    # Normalise + deduplicate while preserving order
+def compute_hybrid_skill_gap(resume_skills: list, jd_skills: list) -> dict:
     jd_skills     = list(dict.fromkeys(s.lower().strip() for s in jd_skills     if s.strip()))
     resume_skills = list(dict.fromkeys(s.lower().strip() for s in resume_skills if s.strip()))
 
@@ -155,8 +60,6 @@ def compute_hybrid_skill_gap(
             "match_method_summary": {**empty_summary, "unmatched_count": len(jd_skills)},
         }
 
-    # ── Batch-encode all skills in one forward pass ───────────────────────────
-    # Import here to avoid circular import — semantic_matcher also imports nothing from here
     from matching.semantic_matcher import get_model
     model = get_model()
 
@@ -170,7 +73,6 @@ def compute_hybrid_skill_gap(
     jd_embeddings     = all_embeddings[: len(jd_skills)]
     resume_embeddings = all_embeddings[len(jd_skills):]
 
-    # ── Match each JD skill to best resume skill ─────────────────────────────
     matched_jd          = []
     missing_jd          = []
     match_details       = []
@@ -224,8 +126,6 @@ def compute_hybrid_skill_gap(
                 "method":     "unmatched",
             })
 
-    # Extra skills: resume skills NOT used to satisfy any JD requirement.
-    # Uses matched_resume_idxs so hybrid-matched skills are correctly excluded.
     extra = [
         res for idx, res in enumerate(resume_skills)
         if idx not in matched_resume_idxs

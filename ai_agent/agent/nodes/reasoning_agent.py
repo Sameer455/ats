@@ -1,21 +1,3 @@
-"""
-agent/nodes/reasoning_agent.py — Node 5: LLM-powered reasoning and evaluation.
-
-Calls the existing ``run_ats_analysis`` from llm_chain.py, parses the
-structured response, and produces fit_category, risk_level, red_flags,
-hiring_recommendation, etc.  Tracks reasoning_attempts and retries if the
-LLM output fails validation (fit_category == "Unable to determine").
-
-ESCO / Evidence upgrade (additive — existing fallback schema unchanged):
-  - When ESCO data is present, passes enriched context to the LLM:
-      esco_role_profile, evidence_summary, implicit_skills_assessment,
-      shallow_claimed_skills, trajectory_signals.
-  - Upgraded output schema includes:
-      headline, strengths, concerns, trajectory_assessment,
-      recommendation, confidence, interview_focus.
-  - If ESCO is not available: uses existing output schema unchanged.
-"""
-
 from __future__ import annotations
 
 import re
@@ -24,21 +6,7 @@ from typing import Any
 from agent.state import ATSAgentState
 
 
-# ── Existing parser (unchanged) ───────────────────────────────────────────────
-
 def _parse_llm_response(raw: str) -> dict[str, Any]:
-    """
-    Parses the structured LLM analysis text into individual fields.
-
-    Extracts:
-      - fit_category: High Fit | Medium Fit | Low Fit
-      - risk_level: Low Risk | Moderate Risk | High Risk
-      - transferable_skills: list of skills mentioned as transferable
-      - learning_capability: brief assessment
-      - red_flags: list of concerns
-      - hiring_recommendation: the recommendation section
-      - explanation: overall assessment
-    """
     result: dict[str, Any] = {
         "fit_category":        "Unable to determine",
         "risk_level":          "Unknown",
@@ -54,7 +22,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
 
     raw_lower = raw.lower()
 
-    # Fit category
     for pattern, category in [
         (r"(?:high|strong)\s*fit",                  "Strong Fit"),
         (r"(?:medium|moderate|partial)\s*fit",      "Partial Fit"),
@@ -64,7 +31,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
             result["fit_category"] = category
             break
 
-    # Risk level
     for pattern, level in [
         (r"low\s*risk",      "Low Risk"),
         (r"moderate\s*risk", "Moderate Risk"),
@@ -74,7 +40,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
             result["risk_level"] = level
             break
 
-    # Hiring recommendation
     rec_match = re.search(
         r"(?:###?\s*\d*\.?\s*)?hiring\s+recommendation\s*[:\-—]?\s*\n?(.*?)(?:\n###|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -86,7 +51,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
         if paragraphs:
             result["hiring_recommendation"] = paragraphs[-1][:500]
 
-    # Overall assessment
     assess_match = re.search(
         r"(?:###?\s*\d*\.?\s*)?overall\s+assessment\s*[:\-—]?\s*\n?(.*?)(?:\n###|\n\n|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -94,7 +58,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
     if assess_match:
         result["explanation"] = assess_match.group(1).strip()[:1000]
 
-    # Red flags
     red_flags: list[str] = []
     for pattern in [
         r"(?:risk|concern|gap|flag|warning|issue)\s*(?:factor|area)?s?\s*[:—\-]\s*(.+?)(?:\n|$)",
@@ -108,26 +71,15 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
     return result
 
 
-# ── Upgraded LLM output parser (ESCO-aware) ───────────────────────────────────
-
 def _parse_upgraded_response(raw: str) -> dict[str, Any]:
-    """
-    Parse the ESCO-aware LLM output with the upgraded schema.
-
-    Extracts: headline, strengths, concerns, trajectory_assessment,
-    recommendation, confidence, interview_focus.
-    Falls back to _parse_llm_response for any field not found.
-    """
     base = _parse_llm_response(raw)
 
-    # headline
     hl_match = re.search(
         r"(?:###?\s*)?headline\s*[:\-—]?\s*\n?(.+?)(?:\n|$)",
         raw, re.IGNORECASE,
     )
     headline = hl_match.group(1).strip()[:300] if hl_match else base["hiring_recommendation"][:200]
 
-    # strengths (list items after "Strengths")
     str_match = re.search(
         r"(?:###?\s*)?strengths?\s*[:\-—]?\s*\n(.*?)(?:\n###|\n\n|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -140,7 +92,6 @@ def _parse_upgraded_response(raw: str) -> dict[str, Any]:
                 strengths.append(line[:200])
     strengths = strengths[:8]
 
-    # concerns
     con_match = re.search(
         r"(?:###?\s*)?concerns?\s*[:\-—]?\s*\n(.*?)(?:\n###|\n\n|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -153,7 +104,6 @@ def _parse_upgraded_response(raw: str) -> dict[str, Any]:
                 concerns.append(line[:200])
     concerns = concerns[:8] or base["red_flags"]
 
-    # trajectory_assessment
     traj_match = re.search(
         r"(?:###?\s*)?trajectory\s*[:\-—]?\s*\n?(.+?)(?:\n###|\n\n|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -162,7 +112,6 @@ def _parse_upgraded_response(raw: str) -> dict[str, Any]:
         traj_match.group(1).strip()[:400] if traj_match else "Not assessed"
     )
 
-    # recommendation (Strong Hire | Hire | Maybe | Pass)
     rec_map = [
         (r"\bstrong\s+hire\b", "Strong Hire"),
         (r"\bhire\b",          "Hire"),
@@ -175,14 +124,12 @@ def _parse_upgraded_response(raw: str) -> dict[str, Any]:
             recommendation = label
             break
 
-    # confidence
     conf_match = re.search(r"confidence\s*[:\-—]?\s*([\d.]+)", raw, re.IGNORECASE)
     try:
         confidence = min(1.0, max(0.0, float(conf_match.group(1)))) if conf_match else 0.7
     except (ValueError, AttributeError):
         confidence = 0.7
 
-    # interview_focus
     focus_match = re.search(
         r"(?:###?\s*)?interview\s+focus\s*[:\-—]?\s*\n(.*?)(?:\n###|\n\n|\Z)",
         raw, re.IGNORECASE | re.DOTALL,
@@ -207,13 +154,7 @@ def _parse_upgraded_response(raw: str) -> dict[str, Any]:
     }
 
 
-# ── Context builder for upgraded prompt ──────────────────────────────────────
-
 def _build_esco_context(state: ATSAgentState) -> str:
-    """
-    Build the supplementary ESCO/evidence context block for the LLM prompt.
-    Returns '' when ESCO data is not available.
-    """
     esco_occ      = state.get("jd_esco_occupation", "")
     esco_conf     = state.get("jd_esco_confidence", 0.0)
     esco_profile  = state.get("jd_esco_skill_profile", {})
@@ -242,7 +183,6 @@ def _build_esco_context(state: ATSAgentState) -> str:
             + ", ".join(implicit[:10])
         )
 
-    # Evidence summary (top 8 skills)
     if skill_ev:
         lines.append("\n## Skill Evidence Summary")
         for skill, ev_dict in list(skill_ev.items())[:8]:
@@ -262,7 +202,6 @@ def _build_esco_context(state: ATSAgentState) -> str:
             "Shallow/listed-only skills (depth≤0.3): " + ", ".join(shallow[:8])
         )
 
-    # Trajectory signals (years trend from evidence)
     years_by_skill = {
         s: d.get("recency_year", 0)
         for s, d in skill_ev.items()
@@ -283,7 +222,6 @@ def _safe_fallback(
     composite_score: float,
     adversarial_flags: list[str],
 ) -> dict[str, Any]:
-    """Generates safe fallback values when LLM reasoning fails completely."""
     if composite_score >= 80:
         fit, risk = "Strong Fit", "Low Risk"
         rec = "Strong candidate based on quantitative scoring. LLM analysis unavailable."
@@ -303,7 +241,6 @@ def _safe_fallback(
         "hiring_recommendation": rec,
         "explanation":           f"Score-based assessment: {composite_score}% composite score.",
         "llm_analysis":          "LLM analysis was not available after retry attempts.",
-        # Upgraded fields (defaults)
         "headline":              rec[:200],
         "strengths":             [],
         "concerns":              [],
@@ -314,28 +251,7 @@ def _safe_fallback(
     }
 
 
-# ── Main node function ────────────────────────────────────────────────────────
-
 def reasoning_agent(state: ATSAgentState) -> dict[str, Any]:
-    """
-    Reasoning Agent — runs LLM analysis and extracts structured evaluation.
-
-    Reads:
-        composite_score, semantic_score, skill_coverage_pct, matched_skills,
-        missing_skills, experience_years, required_experience, education,
-        jd_text, roles, llm_provider, enable_llm, adversarial_flags,
-        reasoning_attempts,
-        jd_esco_occupation, jd_esco_confidence, jd_esco_skill_profile,
-        jd_implicit_skills, skill_evidence, top_evidenced_skills,
-        shallow_claimed_skills  (all optional, from ESCO/evidence upgrade)
-    Writes:
-        fit_category, risk_level, transferable_skills, learning_capability,
-        red_flags, hiring_recommendation, explanation, llm_analysis,
-        reasoning_attempts,
-        headline, strengths, concerns, trajectory_assessment,
-        recommendation, confidence, interview_focus,
-        agent_trace
-    """
     trace: list[str]        = list(state.get("agent_trace", []))
     attempts: int           = state.get("reasoning_attempts", 0) + 1
     enable_llm: bool        = state.get("enable_llm", True)
@@ -363,7 +279,6 @@ def reasoning_agent(state: ATSAgentState) -> dict[str, Any]:
                 f"- {f}" for f in adversarial_flags
             )
 
-        # Append ESCO + evidence context when available
         esco_context = _build_esco_context(state)
         jd_with_context = jd_text + esco_context if esco_context else jd_text
 
@@ -380,7 +295,6 @@ def reasoning_agent(state: ATSAgentState) -> dict[str, Any]:
             provider           = llm_provider,
         )
 
-        # Use upgraded parser when ESCO context was injected
         parsed = (
             _parse_upgraded_response(raw_analysis)
             if has_esco
@@ -394,7 +308,6 @@ def reasoning_agent(state: ATSAgentState) -> dict[str, Any]:
         )
 
         base_return: dict[str, Any] = {
-            # ── Existing fields (unchanged) ───────────────────────────────────
             "fit_category":          parsed["fit_category"],
             "risk_level":            parsed["risk_level"],
             "transferable_skills":   parsed["transferable_skills"],
@@ -404,7 +317,6 @@ def reasoning_agent(state: ATSAgentState) -> dict[str, Any]:
             "explanation":           parsed["explanation"],
             "llm_analysis":          raw_analysis,
             "reasoning_attempts":    attempts,
-            # ── Upgraded fields (additive) ────────────────────────────────────
             "headline":              parsed.get("headline", ""),
             "strengths":             parsed.get("strengths", []),
             "concerns":              parsed.get("concerns", parsed["red_flags"]),

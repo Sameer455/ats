@@ -3,20 +3,16 @@ from jose import jwt, JWTError
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-load_dotenv()  # ensure .env is loaded so JWT_SECRET_KEY is available
+load_dotenv()
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-# Should ideally be in environment variables
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-for-development-change-this")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes for access token
-REFRESH_TOKEN_EXPIRE_DAYS = 7     # 7 days for refresh token
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
-# ⚠️  bcrypt 4.x is incompatible with passlib and crashes on Python 3.14.
-# Using sha256_crypt instead — it's built into passlib (no C library needed),
-# has no 72-byte password limit, and is secure for development & production.
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")

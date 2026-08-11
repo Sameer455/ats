@@ -30,7 +30,6 @@ class AnalysisHistory(Base):
     user = relationship("User", back_populates="analyses")
 
 
-# JD Library models
 class JDCategory(Base):
     __tablename__ = "jd_categories"
 

@@ -15,7 +15,6 @@ from backend.routes.batch_analyze import router as batch_analyze_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: authenticate HF Hub and build ESCO index."""
     hf_token = os.getenv("HF_TOKEN")
     if hf_token:
         try:
@@ -56,7 +55,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS must be registered before routers
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
@@ -65,10 +63,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Init DB tables
 Base.metadata.create_all(bind=engine)
 
-# Register routers
 app.include_router(auth_router)
 app.include_router(analyze_router)
 app.include_router(history_router)

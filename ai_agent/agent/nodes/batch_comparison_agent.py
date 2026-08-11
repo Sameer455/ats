@@ -1,11 +1,3 @@
-"""
-agent/nodes/batch_comparison_agent.py — Node 6b: Batch candidate ranking & comparison.
-
-Only runs in BATCH analysis mode.  Receives pre-analyzed candidates from
-state, ranks them by composite_score, and generates a comparative summary
-using the LLM.
-"""
-
 from __future__ import annotations
 
 import json
@@ -33,17 +25,8 @@ Be concise, data-driven, and professional. Return plain text, not JSON.
 
 
 def batch_comparison_agent(state: ATSAgentState) -> dict[str, Any]:
-    """
-    Batch Comparison Agent — ranks and compares multiple analyzed candidates.
-
-    Reads:
-        batch_results (list of per-candidate analysis dicts),
-        jd_text, llm_provider, enable_llm
-    Writes:
-        candidate_rankings, comparison_table, agent_trace
-    """
     trace: list[str] = list(state.get("agent_trace", []))
-    batch_results: list[dict[str, Any]] = state.get("batch_results", []) # type: ignore
+    batch_results: list[dict[str, Any]] = state.get("batch_results", [])  # type: ignore
     enable_llm: bool = state.get("enable_llm", True)
     llm_provider: str = state.get("llm_provider", "ollama")
     jd_text: str = state.get("jd_text", "")
@@ -57,14 +40,12 @@ def batch_comparison_agent(state: ATSAgentState) -> dict[str, Any]:
         }
 
     try:
-        # ── Sort candidates by composite score ────────────────────────────────
         sorted_candidates = sorted(
             batch_results,
             key=lambda c: c.get("composite_score", 0.0),
             reverse=True,
         )
 
-        # ── Build comparison table ────────────────────────────────────────────
         comparison_table: list[dict[str, Any]] = []
         candidate_rankings: list[dict[str, Any]] = []
 
@@ -94,7 +75,6 @@ def batch_comparison_agent(state: ATSAgentState) -> dict[str, Any]:
             }
             candidate_rankings.append(ranking_entry)
 
-        # ── Generate comparative summary via LLM ──────────────────────────────
         comparative_summary = ""
         if enable_llm and len(sorted_candidates) > 1:
             try:
@@ -102,7 +82,6 @@ def batch_comparison_agent(state: ATSAgentState) -> dict[str, Any]:
                 from langchain_core.prompts import PromptTemplate
                 from langchain_core.output_parsers import StrOutputParser
 
-                # Build summary text for the prompt
                 cand_lines = []
                 for row in comparison_table:
                     cand_lines.append(
@@ -139,7 +118,6 @@ def batch_comparison_agent(state: ATSAgentState) -> dict[str, Any]:
                 f"(LLM comparison skipped)"
             )
 
-        # Add comparative summary to rankings
         for entry in candidate_rankings:
             entry["comparative_summary"] = comparative_summary
 
